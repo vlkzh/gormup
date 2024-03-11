@@ -37,6 +37,9 @@ func (p *plugin) register(db *gorm.DB) {
 	updateCallback.Before("gorm:update").Register("gormup:before_update", p.beforeUpdate)
 	updateCallback.After("gorm:update").Register("gormup:after_update", p.afterUpdate)
 
+	createCallback := db.Callback().Create()
+	createCallback.After("*").Register("gormup:after_create", p.afterCreate)
+
 	deleteCallback := db.Callback().Update()
 	deleteCallback.Before("*").Register("gormup:before_delete", p.beforeDelete)
 }
@@ -174,6 +177,28 @@ func (p *plugin) afterAllQuery(db *gorm.DB) {
 	if errors.Is(db.Error, ErrAlreadyFetched) {
 		db.Error = nil
 		return
+	}
+}
+
+func (p *plugin) afterCreate(db *gorm.DB) {
+	if db.Error != nil {
+		return
+	}
+
+	ctx := db.Statement.Context
+
+	models := p.extractModels(db.Statement.ReflectValue)
+	for _, model := range models {
+		ent := createEntity(
+			ctx,
+			db.Statement.Schema,
+			model,
+		)
+		if ent == nil {
+			return
+		}
+		ent.Snap(ctx)
+		p.entities.Set(ctx, ent)
 	}
 }
 
