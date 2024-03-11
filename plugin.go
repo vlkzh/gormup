@@ -218,18 +218,23 @@ func (p *plugin) modelType(dest any) (reflect.Type, bool) {
 }
 
 func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
-	if len(st.Clauses) != 1 {
-		return nil, false
-	}
-	var cl clause.Clause
-	for _, cl = range st.Clauses {
-		break
-	}
-	if cl.Name != "WHERE" {
+	if len(st.Clauses) == 0 {
 		return nil, false
 	}
 
-	where, ok := cl.Expression.(clause.Where)
+	var clauseWhere clause.Clause
+	for _, cl := range st.Clauses {
+		if cl.Name == "WHERE" {
+			clauseWhere = cl
+			break
+		}
+	}
+
+	if clauseWhere.Name != "WHERE" {
+		return nil, false
+	}
+
+	where, ok := clauseWhere.Expression.(clause.Where)
 	if !ok {
 		return nil, false
 	}
