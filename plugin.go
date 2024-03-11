@@ -88,14 +88,14 @@ func (p *plugin) beforeQuery(db *gorm.DB) {
 		return
 	}
 
-	ids, ok := p.extractIds(db.Statement)
-	if !ok {
-		return
-	}
-
 	db.Set(supportKey, true)
 
 	if p.withoutQueryCache(db) {
+		return
+	}
+
+	ids, ok := p.extractIds(db.Statement)
+	if !ok {
 		return
 	}
 
@@ -148,18 +148,19 @@ func (p *plugin) afterQuery(db *gorm.DB) {
 
 	ctx := db.Statement.Context
 
-	ent := createEntity(
-		ctx,
-		db.Statement.Schema,
-		db.Statement.ReflectValue,
-	)
-	if ent == nil {
-		return
+	models := p.extractModels(db.Statement.ReflectValue)
+	for _, model := range models {
+		ent := createEntity(
+			ctx,
+			db.Statement.Schema,
+			model,
+		)
+		if ent == nil {
+			return
+		}
+		ent.Snap(ctx)
+		p.entities.Set(ctx, ent)
 	}
-
-	ent.Snap(ctx)
-
-	p.entities.Set(ctx, ent)
 }
 
 func (p *plugin) afterAllQuery(db *gorm.DB) {
@@ -215,6 +216,35 @@ func (p *plugin) modelType(dest any) (reflect.Type, bool) {
 	}
 
 	return val.Type(), false
+}
+
+func (p *plugin) extractModels(val reflect.Value) (out []reflect.Value) {
+
+	for {
+		if val.Kind() == reflect.Pointer {
+			val = val.Elem()
+		} else {
+			break
+		}
+	}
+
+	if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
+		if val.IsZero() {
+			return nil
+		}
+		length := val.Len()
+		i := 0
+		for {
+			if i >= length {
+				break
+			}
+			out = append(out, val.Index(i))
+			i += 1
+		}
+		return out
+	} else {
+		return []reflect.Value{val}
+	}
 }
 
 func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
