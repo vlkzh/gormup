@@ -1,13 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"log/slog"
 	"math/rand"
 	"os"
+	"reflect"
 
 	"example/models"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/shockerli/cvt"
 	"github.com/vlkzh/gormup"
 	"gorm.io/driver/postgres"
@@ -108,19 +111,34 @@ func change(db *gorm.DB) (err error) {
 	//db = internal.WithoutQueryCache(db)
 	//db = internal.WithoutReduceUpdate(db)
 
-	var doc1 *models.Document
-	err = db.Session(&gorm.Session{}).Find(&doc1, "id = ?", 7).Error
+	var docs1 []*models.Document
+	err = db.Session(&gorm.Session{}).Find(&docs1, "id = ?", 1).Error
 	if err != nil {
 		return err
 	}
+
+	var docs2 []*models.Document
+	err = db.Session(&gorm.Session{}).Find(&docs2, "id = ?", 1).Error
+	if err != nil {
+		return err
+	}
+
+	if len(docs1) != 1 || len(docs2) != 1 {
+		panic("len(docs1) != 1 || len(docs2) != 1")
+	}
+
+	doc1 := docs1[0]
 
 	var doc2 *models.Document
-	err = db.Session(&gorm.Session{}).Find(&doc2, "id = ?", 7).Error
-	if err != nil {
-		return err
-	}
+	v1 := reflect.ValueOf(doc1)
+	v2 := reflect.ValueOf(&doc2)
+	v2.Elem().Set(v1)
 
-	// spew.Dump(doc1, doc2)
+	spew.Dump(doc1, doc2)
+
+	if doc1 != doc2 {
+		panic(fmt.Sprintf("doc1[%p] != doc2[%p]\n", doc1, doc2))
+	}
 
 	doc1.Number = rand.Int63n(100000)
 

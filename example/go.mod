@@ -5,6 +5,7 @@ go 1.21
 replace github.com/vlkzh/gormup => ./../
 
 require (
+	github.com/davecgh/go-spew v1.1.1
 	github.com/shockerli/cvt v0.2.8
 	github.com/vlkzh/gormup v0.0.0-00010101000000-000000000000
 	gorm.io/driver/postgres v1.5.7

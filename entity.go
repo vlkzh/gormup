@@ -12,7 +12,6 @@ type entity struct {
 	schema       *schema.Schema
 	reflectValue reflect.Value
 
-	valid  bool
 	id     string
 	fields map[string]string
 }
@@ -25,7 +24,7 @@ func createEntity(
 	if v.Kind() == reflect.Interface {
 		v = v.Elem()
 	}
-	if v.Type().Kind() != reflect.Struct {
+	if !isValidStruct(v) {
 		return nil
 	}
 	if len(sch.PrimaryFields) != 1 {

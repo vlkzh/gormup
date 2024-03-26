@@ -78,8 +78,8 @@ func (p *plugin) isSupportSelect(db *gorm.DB) bool {
 		return false
 	}
 
-	modelType, _ := p.modelType(db.Statement.Dest)
-	if modelType.String() != db.Statement.Schema.ModelType.String() {
+	dest := reflect.ValueOf(db.Statement.Dest)
+	if getModelType(dest).String() != db.Statement.Schema.ModelType.String() {
 		return false
 	}
 
@@ -98,7 +98,7 @@ func (p *plugin) beforeQuery(db *gorm.DB) {
 	}
 
 	ids, ok := p.extractIds(db.Statement)
-	if !ok {
+	if !ok || len(ids) == 0 {
 		return
 	}
 
@@ -114,27 +114,12 @@ func (p *plugin) beforeQuery(db *gorm.DB) {
 		}
 	}
 
-	if len(values) == 0 {
+	if len(values) != len(ids) {
 		return
 	}
 
-	_, isArray := p.modelType(db.Statement.Dest)
-	if isArray {
-		newVal := reflect.MakeSlice(db.Statement.ReflectValue.Type(), len(values), len(values))
-		for i, v := range values {
-			refEl := newVal.Index(i)
-			if refEl.Kind() == reflect.Ptr {
-				n := reflect.New(refEl.Type().Elem())
-				n.Elem().Set(v)
-				refEl.Set(n)
-			} else {
-				refEl.Set(v)
-			}
-		}
-		db.Statement.ReflectValue.Set(newVal)
-	} else {
-		db.Statement.ReflectValue.Set(values[0])
-	}
+	dest := reflect.ValueOf(db.Statement.Dest)
+	setValue(dest, values...)
 
 	db.Error = ErrAlreadyFetched
 }
@@ -149,21 +134,7 @@ func (p *plugin) afterQuery(db *gorm.DB) {
 		return
 	}
 
-	ctx := db.Statement.Context
-
-	models := p.extractModels(db.Statement.ReflectValue)
-	for _, model := range models {
-		ent := createEntity(
-			ctx,
-			db.Statement.Schema,
-			model,
-		)
-		if ent == nil {
-			return
-		}
-		ent.Snap(ctx)
-		p.entities.Set(ctx, ent)
-	}
+	p.setEntities(db)
 }
 
 func (p *plugin) afterAllQuery(db *gorm.DB) {
@@ -184,22 +155,7 @@ func (p *plugin) afterCreate(db *gorm.DB) {
 	if db.Error != nil {
 		return
 	}
-
-	ctx := db.Statement.Context
-
-	models := p.extractModels(db.Statement.ReflectValue)
-	for _, model := range models {
-		ent := createEntity(
-			ctx,
-			db.Statement.Schema,
-			model,
-		)
-		if ent == nil {
-			return
-		}
-		ent.Snap(ctx)
-		p.entities.Set(ctx, ent)
-	}
+	p.setEntities(db)
 }
 
 func (p *plugin) beforeDelete(db *gorm.DB) {
@@ -217,59 +173,53 @@ func (p *plugin) beforeDelete(db *gorm.DB) {
 	}
 }
 
-func (p *plugin) modelType(dest any) (reflect.Type, bool) {
+func (p *plugin) setEntities(db *gorm.DB) {
+	ctx := db.Statement.Context
+	values := p.extractEntityValues(db.Statement.Dest)
+	for _, value := range values {
+		ent := createEntity(
+			ctx,
+			db.Statement.Schema,
+			value,
+		)
+		if ent == nil {
+			return
+		}
+		ent.Snap(ctx)
+		p.entities.Set(ctx, ent)
+	}
+}
+
+func (p *plugin) extractEntityValues(dest any) (out []reflect.Value) {
+
 	val := reflect.ValueOf(dest)
 
-	for {
-		if val.Kind() == reflect.Ptr {
-			val = val.Elem()
-		} else {
-			break
-		}
-	}
-
-	if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
-		tp := val.Type().Elem()
-		if tp.Kind() == reflect.Pointer {
-			tp = tp.Elem()
-		}
-		return tp, true
-	}
-
-	if val.Kind() == reflect.Interface {
+	if is2PointerOfStruct(val.Type()) {
 		val = val.Elem()
 	}
 
-	return val.Type(), false
-}
-
-func (p *plugin) extractModels(val reflect.Value) (out []reflect.Value) {
-
-	for {
-		if val.Kind() == reflect.Pointer {
-			val = val.Elem()
-		} else {
-			break
-		}
+	if isValidStruct(val) {
+		return []reflect.Value{val}
 	}
 
-	if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
-		if val.IsZero() {
-			return nil
-		}
+	if isPointerOfArray(val.Type()) {
+		val = val.Elem()
 		length := val.Len()
 		i := 0
 		for {
 			if i >= length {
 				break
 			}
-			out = append(out, val.Index(i))
+			el := val.Index(i)
+			if isValidStruct(el) {
+				out = append(out, el)
+			}
 			i += 1
 		}
 		return out
-	} else {
-		return []reflect.Value{val}
 	}
+
+	return nil
 }
 
 func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
