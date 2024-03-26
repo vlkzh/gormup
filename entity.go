@@ -12,6 +12,9 @@ type entity struct {
 	schema       *schema.Schema
 	reflectValue reflect.Value
 
+	primaryKey       string
+	otherPrimaryKeys []string
+
 	id     string
 	fields map[string]string
 }
@@ -19,6 +22,7 @@ type entity struct {
 func createEntity(
 	ctx context.Context,
 	sch *schema.Schema,
+	otherPrimaryKeys []string,
 	v reflect.Value,
 ) *entity {
 	if v.Kind() == reflect.Interface {
@@ -32,8 +36,10 @@ func createEntity(
 	}
 
 	e := &entity{
-		schema:       sch,
-		reflectValue: v,
+		schema:           sch,
+		primaryKey:       sch.PrioritizedPrimaryField.DBName,
+		otherPrimaryKeys: otherPrimaryKeys,
+		reflectValue:     v,
 	}
 
 	value, isZero := sch.PrioritizedPrimaryField.ValueOf(ctx, v)
@@ -47,19 +53,28 @@ func createEntity(
 	return e
 }
 
-func getEntityKey(table, id string) string {
-	return fmt.Sprintf("%s-%s", table, id)
+func (e *entity) GetKey() string {
+	return getEntityKey(e.schema.Table, e.primaryKey, e.id)
 }
 
-func (e *entity) Key() string {
-	return getEntityKey(e.schema.Table, e.id)
+func (e *entity) GetOtherKeys() (keys []string) {
+	for _, pk := range e.otherPrimaryKeys {
+		if pk == e.primaryKey {
+			continue
+		}
+		v, ok := e.fields[pk]
+		if ok {
+			keys = append(keys, getEntityKey(e.schema.Table, pk, v))
+		}
+	}
+	return
 }
 
 func (e *entity) Value() any {
 	return e.reflectValue.Interface()
 }
 
-func (e *entity) Snap(ctx context.Context) *entity {
+func (e *entity) Sync(ctx context.Context) *entity {
 	if e == nil {
 		return nil
 	}
@@ -77,4 +92,8 @@ func (e *entity) Snap(ctx context.Context) *entity {
 	}
 
 	return e
+}
+
+func getEntityKey(table, column, value string) string {
+	return fmt.Sprintf("%s.%s=%s", table, column, value)
 }

@@ -1,14 +1,12 @@
 package main
 
 import (
+	"example/models"
 	"fmt"
 	"log"
 	"log/slog"
 	"math/rand"
 	"os"
-	"reflect"
-
-	"example/models"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/shockerli/cvt"
@@ -107,32 +105,26 @@ func initDB(db *gorm.DB) (err error) {
 
 func change(db *gorm.DB) (err error) {
 
-	gormup.Register(db, gormup.Config{})
+	gormup.Register(db, gormup.Config{
+		OtherPrimaryKeys: map[string][]string{
+			"docs.documents": {"name"},
+		},
+	})
+
 	//db = internal.WithoutQueryCache(db)
 	//db = internal.WithoutReduceUpdate(db)
 
-	var docs1 []*models.Document
-	err = db.Session(&gorm.Session{}).Find(&docs1, "id = ?", 1).Error
+	var doc1 *models.Document
+	err = db.Session(&gorm.Session{}).Find(&doc1, "id = ?", 1).Error
 	if err != nil {
 		return err
 	}
-
-	var docs2 []*models.Document
-	err = db.Session(&gorm.Session{}).Find(&docs2, "id = ?", 1).Error
-	if err != nil {
-		return err
-	}
-
-	if len(docs1) != 1 || len(docs2) != 1 {
-		panic("len(docs1) != 1 || len(docs2) != 1")
-	}
-
-	doc1 := docs1[0]
 
 	var doc2 *models.Document
-	v1 := reflect.ValueOf(doc1)
-	v2 := reflect.ValueOf(&doc2)
-	v2.Elem().Set(v1)
+	err = db.Session(&gorm.Session{}).Find(&doc2, "name = ?", doc1.Name).Error
+	if err != nil {
+		return err
+	}
 
 	spew.Dump(doc1, doc2)
 

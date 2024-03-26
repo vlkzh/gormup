@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 const (
@@ -58,6 +59,18 @@ func (p *plugin) withoutReduceUpdate(db *gorm.DB) bool {
 	return p.getBool(db, withoutReduceUpdateKey, false)
 }
 
+func (p *plugin) getOtherPrimaryKeys(sch *schema.Schema) (keys []string) {
+	if p.config.OtherPrimaryKeys != nil {
+		for _, name := range p.config.OtherPrimaryKeys[sch.Table] {
+			field := sch.LookUpField(name)
+			if field != nil {
+				keys = append(keys, field.DBName)
+			}
+		}
+	}
+	return keys
+}
+
 func (p *plugin) isSupportSelect(db *gorm.DB) bool {
 	if db.Error != nil {
 		return false
@@ -97,31 +110,52 @@ func (p *plugin) beforeQuery(db *gorm.DB) {
 		return
 	}
 
-	ids, ok := p.extractIds(db.Statement)
-	if !ok || len(ids) == 0 {
+	p.extractModels(db)
+}
+
+func (p *plugin) extractModels(db *gorm.DB) {
+	extracted := p.extractModelsByColumn(db.Statement.Schema.PrioritizedPrimaryField.DBName, db)
+	if extracted {
 		return
 	}
 
-	ctx := db.Statement.Context
-
-	values := make([]reflect.Value, len(ids))
-	for i, id := range ids {
-		ent := p.entities.Get(ctx, getEntityKey(db.Statement.Schema.Table, id))
-		if ent != nil {
-			values[i] = ent.reflectValue
-		} else {
+	for _, primaryKey := range p.getOtherPrimaryKeys(db.Statement.Schema) {
+		extracted = p.extractModelsByColumn(primaryKey, db)
+		if extracted {
 			return
 		}
 	}
+}
 
-	if len(values) != len(ids) {
-		return
+func (p *plugin) extractModelsByColumn(columnName string, db *gorm.DB) bool {
+	values, ok := p.extractColumnValuesFromConditions(columnName, db.Statement)
+	if !ok || len(values) == 0 {
+		return false
+	}
+
+	ctx := db.Statement.Context
+	tableName := db.Statement.Schema.Table
+
+	reflectModels := make([]reflect.Value, len(values))
+	for i, value := range values {
+		ent := p.entities.GetByFieldValue(ctx, tableName, columnName, value)
+		if ent != nil {
+			reflectModels[i] = ent.reflectValue
+		} else {
+			return false
+		}
+	}
+
+	if len(reflectModels) != len(values) {
+		return false
 	}
 
 	dest := reflect.ValueOf(db.Statement.Dest)
-	setValue(dest, values...)
+	setValue(dest, reflectModels...)
 
 	db.Error = ErrAlreadyFetched
+
+	return true
 }
 
 func (p *plugin) afterQuery(db *gorm.DB) {
@@ -163,13 +197,16 @@ func (p *plugin) beforeDelete(db *gorm.DB) {
 		return
 	}
 
-	ids, ok := p.extractIds(db.Statement)
+	columnName := db.Statement.Schema.PrioritizedPrimaryField.DBName
+	tableName := db.Statement.Schema.Table
+
+	ids, ok := p.extractColumnValuesFromConditions(columnName, db.Statement)
 	if !ok {
 		return
 	}
 
 	for _, id := range ids {
-		p.entities.Delete(db.Statement.Context, getEntityKey(db.Statement.Schema.Table, id))
+		p.entities.Delete(db.Statement.Context, getEntityKey(tableName, columnName, id))
 	}
 }
 
@@ -180,12 +217,13 @@ func (p *plugin) setEntities(db *gorm.DB) {
 		ent := createEntity(
 			ctx,
 			db.Statement.Schema,
+			p.getOtherPrimaryKeys(db.Statement.Schema),
 			value,
 		)
 		if ent == nil {
 			return
 		}
-		ent.Snap(ctx)
+		ent.Sync(ctx)
 		p.entities.Set(ctx, ent)
 	}
 }
@@ -222,10 +260,18 @@ func (p *plugin) extractEntityValues(dest any) (out []reflect.Value) {
 	return nil
 }
 
-func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
+func (p *plugin) extractColumnValuesFromConditions(name string, st *gorm.Statement) ([]string, bool) {
 	if len(st.Clauses) == 0 {
 		return nil, false
 	}
+
+	field := st.Schema.LookUpField(name)
+	if field == nil {
+		return nil, false
+	}
+
+	columnName := field.DBName
+	tableName := st.Schema.Table
 
 	var clauseWhere clause.Clause
 	for _, cl := range st.Clauses {
@@ -247,9 +293,6 @@ func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
 		return nil, false
 	}
 
-	primaryKey := st.Schema.PrioritizedPrimaryField.DBName
-	table := st.Schema.Table
-
 	switch expr := where.Exprs[0].(type) {
 	case clause.Expr:
 		if len(expr.Vars) != 1 {
@@ -257,7 +300,7 @@ func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
 		}
 
 		given := strings.ToLower(strings.ReplaceAll(expr.SQL, " ", ""))
-		expect := strings.ToLower(fmt.Sprintf("%s=?", primaryKey))
+		expect := strings.ToLower(fmt.Sprintf("%s=?", columnName))
 		if given != expect {
 			return nil, false
 		}
@@ -270,26 +313,26 @@ func (p *plugin) extractIds(st *gorm.Statement) ([]string, bool) {
 		if !ok {
 			return nil, false
 		}
-		if col.Table != clause.CurrentTable && col.Table != table {
+		if col.Table != clause.CurrentTable && col.Table != tableName {
 			return nil, false
 		}
-		if col.Name != clause.PrimaryKey && col.Name != primaryKey {
+		if col.Name != clause.PrimaryKey && col.Name != columnName {
 			return nil, false
 		}
-		ids := make([]string, len(expr.Values))
+		values := make([]string, len(expr.Values))
 		for i, v := range expr.Values {
-			ids[i] = toString(v)
+			values[i] = toString(v)
 		}
-		return ids, true
+		return values, true
 	case clause.Eq:
 		col, ok := expr.Column.(clause.Column)
 		if !ok {
 			return nil, false
 		}
-		if col.Table != clause.CurrentTable && col.Table != table {
+		if col.Table != clause.CurrentTable && col.Table != tableName {
 			return nil, false
 		}
-		if col.Name != clause.PrimaryKey && col.Name != primaryKey {
+		if col.Name != clause.PrimaryKey && col.Name != columnName {
 			return nil, false
 		}
 		return []string{toString(expr.Value)}, true
@@ -347,7 +390,7 @@ func (p *plugin) afterUpdate(db *gorm.DB) {
 		db.Error = nil
 		db.RowsAffected = -1
 	} else {
-		p.getEntity(db).Snap(db.Statement.Context)
+		p.getEntity(db).Sync(db.Statement.Context)
 		p.deleteEntity(db)
 	}
 }
@@ -356,12 +399,12 @@ func (p *plugin) reduceUpdateSet(db *gorm.DB, set clause.Set) clause.Set {
 
 	ctx := db.Statement.Context
 
-	current := createEntity(ctx, db.Statement.Schema, db.Statement.ReflectValue)
+	current := createEntity(ctx, db.Statement.Schema, nil, db.Statement.ReflectValue)
 	if current == nil {
 		return set
 	}
 
-	original := p.entities.Get(ctx, current.Key())
+	original := p.entities.Get(ctx, current.GetKey())
 	if original == nil {
 		return set
 	}
