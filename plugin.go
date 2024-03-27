@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	forceKey = "force"
+
 	supportKey             = "gormup:support"
 	entityKey              = "gormup:entity"
 	withoutQueryCacheKey   = "gormup:without_query_cache"
@@ -49,14 +51,14 @@ func (p *plugin) withoutQueryCache(db *gorm.DB) bool {
 	if p.config.WithoutQueryCache {
 		return true
 	}
-	return p.getBool(db, withoutQueryCacheKey, false)
+	return p.getBool(db, withoutQueryCacheKey, false) || p.getBool(db, forceKey, false)
 }
 
 func (p *plugin) withoutReduceUpdate(db *gorm.DB) bool {
 	if p.config.WithoutReduceUpdate {
 		return true
 	}
-	return p.getBool(db, withoutReduceUpdateKey, false)
+	return p.getBool(db, withoutReduceUpdateKey, false) || p.getBool(db, forceKey, false)
 }
 
 func (p *plugin) getOtherPrimaryKeys(sch *schema.Schema) (keys []string) {
