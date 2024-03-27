@@ -105,11 +105,7 @@ func initDB(db *gorm.DB) (err error) {
 
 func change(db *gorm.DB) (err error) {
 
-	gormup.Register(db, gormup.Config{
-		OtherPrimaryKeys: map[string][]string{
-			"docs.documents": {"name"},
-		},
-	})
+	gormup.Register(db, gormup.Config{})
 
 	//db = internal.WithoutQueryCache(db)
 	//db = internal.WithoutReduceUpdate(db)
@@ -121,7 +117,7 @@ func change(db *gorm.DB) (err error) {
 	}
 
 	var doc2 *models.Document
-	err = db.Session(&gorm.Session{}).Find(&doc2, "name = ?", doc1.Name).Error
+	err = db.Session(&gorm.Session{}).Find(&doc2, "id = ?", doc1.ID).Error
 	if err != nil {
 		return err
 	}
